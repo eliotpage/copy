@@ -1,28 +1,18 @@
 # config.py
 
-import os
+DB_FILE = "something"
 
-# Unique peer ID for this device
-PEER_ID = "peer_A"
+# Map bounding box (Cyprus area)
+# Bounding box of your downloaded tiles
+MIN_LON = 32.439494787873
+MAX_LON = 33.52600226240776
+MIN_LAT = 34.93835803187357
+MAX_LAT = 35.41604474498009
 
-# Radio configuration
-RADIO_TYPE = "nrf24"  # Options: "nrf24", "lora"
-RADIO_CHANNEL = 76    # nRF24 channel (0-125)
-RADIO_POWER_DBM = 0   # Output power in dBm (module-dependent)
-RADIO_CS_PIN = 8      # SPI Chip Select pin (GPIO for Raspberry Pi)
-RADIO_IRQ_PIN = 25    # IRQ pin (GPIO for Raspberry Pi)
+ZOOM_MIN = 12
+ZOOM_MAX = 17
 
-# Database / storage
-DB_FILE = os.path.join(os.path.dirname(__file__), "data.db")
+TILES_PATH = "/tiles"  # folder with your existing tiles
 
-# Mesh / forwarding
-MAX_TTL = 5  # Maximum hops for a message
-
-# Flask
-FLASK_HOST = "0.0.0.0"
-FLASK_PORT = 5000
-
-# Map tiles
-TILES_PATH = os.path.join(os.path.dirname(__file__), "tiles")
-
-print(f"[Config] Loaded configuration. Peer ID: {PEER_ID}, Radio: {RADIO_TYPE}, DB: {DB_FILE}")
+# Grid spacing for mesh (adjust to match your D* algorithm resolution)
+GRID_SPACING = 0.001  # ~100m

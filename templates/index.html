@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Local Tile Map + Draw</title>
+
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- Leaflet -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+    <!-- Leaflet Draw -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-draw/dist/leaflet.draw.css" />
+    <script src="https://unpkg.com/leaflet-draw/dist/leaflet.draw.js"></script>
+
+    <style>
+        html, body { margin:0; height:100%; }
+        #map { width:100%; height:100%; }
+    </style>
+</head>
+
+<body>
+<div id="map"></div>
+
+<script>
+    const minZoom = {{ min_zoom }};
+    const maxZoom = {{ max_zoom }};
+    const savedDrawings = {{ drawings | safe }};
+
+    // Map bounds from Flask
+    const bounds = [
+        [ {{ bounds.south }}, {{ bounds.west }} ],
+        [ {{ bounds.north }}, {{ bounds.east }} ]
+    ];
+    const centerLat = {{ bounds.center_lat }};
+    const centerLng = {{ bounds.center_lng }};
+
+    // Create map
+    const map = L.map('map', {
+        minZoom: minZoom,
+        maxZoom: maxZoom,
+        maxBounds: bounds,
+        maxBoundsViscosity: 1.0
+    }).setView([centerLat, centerLng], minZoom);
+
+    // Tile layer
+    L.tileLayer('/tiles/{z}/{x}/{y}.png', {
+        minZoom: minZoom,
+        maxZoom: maxZoom,
+        tileSize: 256,
+        noWrap: true,
+        bounds: bounds
+    }).addTo(map);
+
+    // Feature group for drawn items
+    const drawnItems = new L.FeatureGroup();
+    map.addLayer(drawnItems);
+
+    // Load saved drawings
+    savedDrawings.forEach(f => {
+        const layer = L.geoJSON(f);
+        layer.eachLayer(l => drawnItems.addLayer(l));
+    });
+
+    // Draw control
+    const drawControl = new L.Control.Draw({
+        position: 'topright',
+        draw: {
+            polygon:true,
+            polyline:true,
+            rectangle:true,
+            circle:true,
+            circlemarker:true,
+            marker:true
+        },
+        edit: {
+            featureGroup: drawnItems,
+            remove:true
+        }
+    });
+    map.addControl(drawControl);
+
+    // Save function
+    function saveDrawings() {
+        const data = [];
+        drawnItems.eachLayer(l => data.push(l.toGeoJSON()));
+        fetch("/save_drawings", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(data)
+        });
+    }
+
+    // Events
+    map.on(L.Draw.Event.CREATED, e => { drawnItems.addLayer(e.layer); saveDrawings(); });
+    map.on(L.Draw.Event.EDITED, e => { saveDrawings(); });
+    map.on(L.Draw.Event.DELETED, e => { saveDrawings(); });
+
+</script>
+</body>
+</html>

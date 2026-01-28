@@ -1,131 +1,121 @@
-# flask_server.py
-
-from flask import Flask, render_template, request, jsonify, send_from_directory
-import threading
-import time
+from flask import Flask, render_template, send_from_directory, abort, request, jsonify
 import os
-
-from storage import Storage
-from mesh import MeshNetwork
-from radio_interface import RadioInterface
-from routing import DStarLite
-import config
+import math
+import json
 
 app = Flask(__name__)
-storage = Storage()
-radio = RadioInterface()
-mesh = MeshNetwork(storage, radio)
-routing = DStarLite(storage, width=100, height=100, default_cost=1)
 
-print("[Server] Flask server initialized")
+TILES_DIR = "tiles"
+MIN_ZOOM = 12
+MAX_ZOOM = 14
+DRAWINGS_FILE = "drawings.json"
 
-@app.route('/tiles/<path:filename>')
-def serve_tiles(filename):
-    tiles_dir = config.TILES_PATH
-    file_path = os.path.join(tiles_dir, filename)
-    if not os.path.exists(file_path):
-        print(f"[Server] Tile not found: {filename}")
-    else:
-        print(f"[Server] Serving tile: {filename}")
-    return send_from_directory(tiles_dir, filename)
+# Ensure drawings file exists
+if not os.path.isfile(DRAWINGS_FILE):
+    with open(DRAWINGS_FILE, "w") as f:
+        json.dump([], f)
 
-@app.route('/')
+
+# Convert tile -> lat/lng (Web Mercator)
+def tile_to_latlng(x, y, z):
+    n = 2 ** z
+    lon = x / n * 360.0 - 180.0
+    lat_rad = math.atan(math.sinh(math.pi * (1 - 2 * y / n)))
+    lat = math.degrees(lat_rad)
+    return lat, lon
+
+
+# Scan folders to find real bounds
+def detect_bounds():
+    z = MIN_ZOOM
+    z_dir = os.path.join(TILES_DIR, str(z))
+
+    xs = []
+    ys = []
+
+    if not os.path.isdir(z_dir):
+        raise Exception("No tiles found for zoom " + str(z))
+
+    for x in os.listdir(z_dir):
+        if not x.isdigit():
+            continue
+        x_dir = os.path.join(z_dir, x)
+        for y in os.listdir(x_dir):
+            if not y.endswith(".png"):
+                continue
+            xs.append(int(x))
+            ys.append(int(y.replace(".png", "")))
+
+    min_x = min(xs)
+    max_x = max(xs)
+    min_y = min(ys)
+    max_y = max(ys)
+
+    north, west = tile_to_latlng(min_x, min_y, z)
+    south, east = tile_to_latlng(max_x + 1, max_y + 1, z)
+
+    center_lat = (north + south) / 2
+    center_lng = (west + east) / 2
+
+    bounds = {
+        "north": north,
+        "south": south,
+        "east": east,
+        "west": west,
+        "center_lat": center_lat,
+        "center_lng": center_lng
+    }
+
+    return bounds
+
+
+BOUNDS = detect_bounds()
+
+
+@app.route("/")
 def index():
-    print("[Server] Serving index page")
-    return render_template('index.html')
+    # Load existing drawings
+    with open(DRAWINGS_FILE, "r") as f:
+        drawings = json.load(f)
 
-@app.route('/api/add_annotation', methods=['POST'])
-def add_annotation():
-    data = request.json
-    if not data or 'lat' not in data or 'lon' not in data:
-        print("[Server] add_annotation missing lat/lon")
-        return jsonify({'status': 'error', 'message': 'Missing lat/lon'}), 400
+    return render_template(
+        "index.html",
+        bounds=BOUNDS,
+        min_zoom=MIN_ZOOM,
+        max_zoom=MAX_ZOOM,
+        drawings=json.dumps(drawings)
+    )
 
-    annotation = {
-        'lat': data['lat'],
-        'lon': data['lon'],
-        'data': data.get('data', '')
-    }
 
-    mesh.broadcast_message("annotation", annotation)
-    print(f"[Server] Annotation broadcasted: {annotation}")
+@app.route("/tiles/<int:z>/<int:x>/<int:y>.png")
+def serve_tile(z, x, y):
+    if z < MIN_ZOOM or z > MAX_ZOOM:
+        abort(404)
+    max_index = (2 ** z) - 1
+    if x < 0 or y < 0 or x > max_index or y > max_index:
+        abort(404)
 
-    return jsonify({'status': 'ok'})
+    tile_dir = os.path.join(TILES_DIR, str(z), str(x))
+    tile_file = f"{y}.png"
+    full_path = os.path.join(tile_dir, tile_file)
 
-@app.route('/api/add_obstacle', methods=['POST'])
-def add_obstacle():
-    data = request.json
-    if not data or 'lat' not in data or 'lon' not in data or 'radius' not in data:
-        print("[Server] add_obstacle missing lat/lon/radius")
-        return jsonify({'status': 'error', 'message': 'Missing lat/lon/radius'}), 400
+    if not os.path.isfile(full_path):
+        abort(404)
 
-    obstacle = {
-        'lat': data['lat'],
-        'lon': data['lon'],
-        'radius': data['radius'],
-        'data': data.get('data', '')
-    }
+    return send_from_directory(tile_dir, tile_file)
 
-    mesh.broadcast_message("obstacle", obstacle)
-    print(f"[Server] Obstacle broadcasted: {obstacle}")
 
-    return jsonify({'status': 'ok'})
+@app.route("/save_drawings", methods=["POST"])
+def save_drawings():
+    data = request.get_json()
+    if not isinstance(data, list):
+        return jsonify({"status": "error", "message": "Invalid data"}), 400
 
-@app.route('/api/get_annotations', methods=['GET'])
-def get_annotations():
-    annotations = storage.get_all_annotations()
-    print(f"[Server] Returning {len(annotations)} annotations")
-    return jsonify(annotations)
+    with open(DRAWINGS_FILE, "w") as f:
+        json.dump(data, f, indent=2)
 
-@app.route('/api/get_obstacles', methods=['GET'])
-def get_obstacles():
-    obstacles = storage.get_all_obstacles()
-    print(f"[Server] Returning {len(obstacles)} obstacles")
-    return jsonify(obstacles)
+    return jsonify({"status": "success"})
 
-@app.route('/api/get_path', methods=['POST'])
-def get_path():
-    data = request.json
-    if not data or 'start' not in data or 'goal' not in data:
-        print("[Server] get_path missing start/goal")
-        return jsonify({'status': 'error', 'message': 'Missing start/goal'}), 400
 
-    start = data['start']
-    goal = data['goal']
-
-    try:
-        path = routing.find_path(start, goal)
-    except Exception as e:
-        print(f"[Server] Error finding path: {e}")
-        return jsonify({'status': 'error', 'message': str(e)}), 500
-
-    path_latlon = [routing_grid_to_latlon(xy) for xy in path]
-    print(f"[Server] Path returned with {len(path_latlon)} points")
-
-    return jsonify({'status': 'ok', 'path': path_latlon})
-
-def routing_grid_to_latlon(grid_coord):
-    x, y = grid_coord
-    lat = x * (180 / routing.width)
-    lon = y * (360 / routing.height)
-    return [lat, lon]
-
-def mesh_listener():
-    print("[Server] Mesh listener thread started")
-    while True:
-        try:
-            mesh.receive_message()
-        except Exception as e:
-            print(f"[Server] Error in mesh_listener: {e}")
-        time.sleep(0.01)
-
-listener_thread = threading.Thread(target=mesh_listener, daemon=True)
-listener_thread.start()
-
-if __name__ == '__main__':
-    if not os.path.exists(config.TILES_PATH):
-        os.makedirs(config.TILES_PATH)
-        print(f"[Server] Created tiles folder: {config.TILES_PATH}")
-
-    print(f"[Server] Starting Flask on {config.FLASK_HOST}:{config.FLASK_PORT}")
-    app.run(host=config.FLASK_HOST, port=config.FLASK_PORT, threaded=True)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
